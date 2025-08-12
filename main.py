@@ -349,7 +349,6 @@ def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gem
     filter_pipeline = parse_filter_args(filter_args, local_filter_mapping)
     if filter_pipeline is None:
         return
-    print(filter_pipeline)
 
     results = snowball_literature(initial_papers, filter_pipeline, cache_file)
 
