@@ -45,14 +45,17 @@ python main.py --initial-papers <paper_id_1> <paper_id_2> ... --filter <filter_1
 
 ### Arguments
 
-*   `--initial-papers`: A list of initial paper IDs to start the snowballing from. These can be Semantic Scholar Paper IDs, DOIs, or arXiv IDs. (Required)
+*   `--initial-papers`: A list of initial paper IDs to start the snowballing from. These can be Semantic Scholar Paper IDs, DOIs, or arXiv IDs. (Required, unless using `--convert-to-bibtex`)
 *   `--output-file`: The file to save the results to. (Default: `snowball_results.json`)
+*   `--output-format`: The format to save the results in. (Choices: `json`, `bibtex`; Default: `json`)
 *   `--cache-file`: The file to use for caching Semantic Scholar API responses. (Default: `semantic_scholar_cache.json`)
 *   `--batch-size`: The maximum number of papers to fetch in a single batch from Semantic Scholar. (Default: 10)
 *   `--llm-batch-size`: The maximum number of papers to process in a single batch with the LLM filter. (Default: 5)
+*   `--retry-on-400`: The number of times to retry on HTTP 400 errors. (Default: 0)
 *   `--llm-provider`: The LLM provider to use for the `llm` filter. (Choices: `gemini-api`, `gemini-cli`; Default: `gemini-api`)
 *   `--gemini-cli-path`: The path to the `gemini-cli` executable. (Default: `gemini`)
-*   `--filter`: A filter to apply to the papers. This argument can be used multiple times. (Required)
+*   `--filter`: A filter to apply to the papers. This argument can be used multiple times. (Required, unless using `--convert-to-bibtex`)
+*   `--convert-to-bibtex`: Convert an existing JSON results file to BibTeX format. When this option is used, no snowballing is performed.
 
 ## Filters
 
@@ -113,7 +116,18 @@ You can group filters with OR logic using `or_start` and `or_end`.
 --filter or_end
 ```
 
+## Converting to BibTeX
+
+You can convert an existing JSON results file to BibTeX format using the `--convert-to-bibtex` argument.
+
+```bash
+python main.py --convert-to-bibtex snowball_results.json
+```
+
+This will create a `snowball_results.bib` file in the same directory.
+
 ## Examples
+```
 
 ### Basic Example
 

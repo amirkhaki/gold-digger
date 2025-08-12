@@ -37,8 +37,46 @@ def save_cache(cache, cache_file):
         json.dump(cache, f, indent=4)
     os.rename(tmp_file, cache_file)
 
+def to_bibtex(papers):
+    """
+    Converts a list of paper details to a BibTeX string.
+    """
+    bibtex_entries = []
+    for paper in papers:
+        entry_type = "@article" # Default to article
+        if paper.get("venue"):
+            # Heuristic to determine if it's a conference paper
+            if "proceedings" in paper.get("venue", "").lower() or "conference" in paper.get("venue", "").lower():
+                entry_type = "@inproceedings"
+        
+        citation_key = paper.get("paperId", "")
+        
+        fields = []
+        if paper.get("title"):
+            fields.append(f"  title     = {{{paper.get('title')}}}")
+        if paper.get("authors"):
+            authors = " and ".join([author["name"] for author in paper.get("authors", [])])
+            fields.append(f"  author    = {{{authors}}}")
+        if paper.get("year"):
+            fields.append(f"  year      = {{{paper.get('year')}}}")
+        if paper.get("venue"):
+            if entry_type == "@article":
+                fields.append(f"  journal   = {{{paper.get('venue')}}}")
+            else:
+                fields.append(f"  booktitle = {{{paper.get('venue')}}}")
+        if paper.get("doi"):
+            fields.append(f"  doi       = {{{paper.get('doi')}}}")
+        if paper.get("abstract"):
+            fields.append(f"  abstract  = {{{paper.get('abstract')}}}")
+            
+        bibtex_entry = f"{entry_type}{{{citation_key},\n" + ",\n".join(fields) + "\n}"
+        bibtex_entries.append(bibtex_entry)
+        
+    return "\n\n".join(bibtex_entries)
+
+
 # --- Semantic Scholar API ---
-def get_paper_details_batch(paper_ids, cache_file):
+def get_paper_details_batch(paper_ids, cache_file, retry_on_400=0):
     """
     Fetches paper details in batch from Semantic Scholar API, using cache if available.
     """
@@ -52,29 +90,38 @@ def get_paper_details_batch(paper_ids, cache_file):
         if SEMANTIC_SCHOLAR_API_KEY:
             headers['x-api-key'] = SEMANTIC_SCHOLAR_API_KEY
 
-        try:
-            response = requests.post(
-                'https://api.semanticscholar.org/graph/v1/paper/batch',
-                params={'fields': 'title,authors,year,abstract,citations,references,doi'},
-                json={"ids": papers_to_fetch},
-                headers=headers
-            )
-            response.raise_for_status()
-            
-            for paper_data in response.json():
-                if paper_data: # API returns None for papers not found
-                    # Ensure citations and references are lists
-                    if 'citations' not in paper_data:
-                        paper_data['citations'] = []
-                    if 'references' not in paper_data:
-                        paper_data['references'] = []
-                    
-                    cache[paper_data['paperId']] = paper_data
+        retries = retry_on_400
+        while retries >= 0:
+            try:
+                response = requests.post(
+                    'https://api.semanticscholar.org/graph/v1/paper/batch',
+                    params={'fields': 'title,authors,year,abstract,citations,references,doi'},
+                    json={"ids": papers_to_fetch},
+                    headers=headers
+                )
+                response.raise_for_status()
+                
+                for paper_data in response.json():
+                    if paper_data: # API returns None for papers not found
+                        # Ensure citations and references are lists
+                        if 'citations' not in paper_data:
+                            paper_data['citations'] = []
+                        if 'references' not in paper_data:
+                            paper_data['references'] = []
+                        
+                        cache[paper_data['paperId']] = paper_data
 
-            save_cache(cache, cache_file)
+                save_cache(cache, cache_file)
+                break  # Success, exit the loop
 
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching batch of papers: {e}")
+            except requests.exceptions.RequestException as e:
+                if e.response is not None and e.response.status_code == 400 and retries > 0:
+                    print(f"Client error 400, retrying in 1 second... ({retries} retries left)")
+                    time.sleep(1)
+                    retries -= 1
+                else:
+                    print(f"Error fetching batch of papers: {e}")
+                    break # Unrecoverable error or no retries left
 
     return {pid: cache.get(pid) for pid in paper_ids}
 
@@ -233,7 +280,7 @@ def filter_papers_with_llm_from_file(papers, file_path, llm_provider='gemini-api
 
 # --- Core Logic ---
 
-def snowball_literature(starting_papers, filters, cache_file, batch_size=10):
+def snowball_literature(starting_papers, filters, cache_file, batch_size=10, retry_on_400=0):
     """
     Main function to perform the literature snowballing.
     """
@@ -253,7 +300,7 @@ def snowball_literature(starting_papers, filters, cache_file, batch_size=10):
                 if not batch_ids:
                     continue
 
-                paper_details_batch = get_paper_details_batch(batch_ids, cache_file)
+                paper_details_batch = get_paper_details_batch(batch_ids, cache_file, retry_on_400)
 
                 for paper_id, paper_details in paper_details_batch.items():
                     if not paper_details:
@@ -346,7 +393,7 @@ def parse_filter_args(filter_args, filter_mapping=FILTER_MAPPING):
 
     return filter_pipeline
 
-def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gemini_cli_path, batch_size, llm_batch_size):
+def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gemini_cli_path, batch_size, llm_batch_size, retry_on_400, output_format):
     """
     Main function to run the literature snowballing process.
     """
@@ -362,27 +409,46 @@ def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gem
     if filter_pipeline is None:
         return
 
-    results = snowball_literature(initial_papers, filter_pipeline, cache_file, batch_size)
+    results = snowball_literature(initial_papers, filter_pipeline, cache_file, batch_size, retry_on_400)
+
+    # Prepare results for saving
+    papers_to_save = []
+    for paper in results.values():
+        # Create a copy to avoid modifying the original data
+        paper_copy = paper.copy()
+        paper_copy.pop('citations', None)  # Remove citations if they exist
+        paper_copy.pop('references', None) # Remove references if they exist
+        papers_to_save.append(paper_copy)
 
     # Write results to a file
-    with open(output_file, "w") as f:
-        json.dump(list(results.values()), f, indent=4)
-
-    print(f"Results saved to {output_file}")
+    if output_format == 'json':
+        with open(output_file, "w") as f:
+            json.dump(papers_to_save, f, indent=4)
+        print(f"Results saved to {output_file}")
+    elif output_format == 'bibtex':
+        bibtex_data = to_bibtex(papers_to_save)
+        # Ensure the output file has a .bib extension
+        if not output_file.endswith('.bib'):
+            output_file = os.path.splitext(output_file)[0] + '.bib'
+        with open(output_file, "w") as f:
+            f.write(bibtex_data)
+        print(f"Results saved to {output_file}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Snowball literature search tool.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("--initial-papers", nargs='+', required=True, help="List of initial paper IDs. Can be a Semantic Scholar Paper ID, DOI, or arXiv ID.")
+    parser.add_argument("--initial-papers", nargs='+', help="List of initial paper IDs. Can be a Semantic Scholar Paper ID, DOI, or arXiv ID.")
     parser.add_argument("--output-file", default="snowball_results.json", help="Output file for the results.")
+    parser.add_argument("--output-format", choices=['json', 'bibtex'], default='json', help="Output format for the results.")
     parser.add_argument("--cache-file", default="semantic_scholar_cache.json", help="Cache file for Semantic Scholar data.")
     parser.add_argument("--batch-size", type=int, default=10, help="Maximum number of papers to fetch in a single batch.")
     parser.add_argument("--llm-batch-size", type=int, default=5, help="Maximum number of papers to process in a single batch with the LLM filter.")
+    parser.add_argument("--retry-on-400", type=int, default=0, help="Number of retries on HTTP 400 errors.")
     parser.add_argument("--llm-provider", choices=['gemini-api', 'gemini-cli'], default='gemini-api', help="LLM provider to use.")
     parser.add_argument("--gemini-cli-path", default='gemini', help="Path to the gemini-cli executable.")
-    parser.add_argument("--filter", nargs='+', action='append', required=True, 
+    parser.add_argument("--filter", nargs='+', action='append', 
                         help="""Filter to apply. Can be used multiple times.
 
 Available filters:
@@ -392,6 +458,30 @@ Available filters:
 - llm <criterion>: Filter with a custom criterion using an LLM.
 - llm_from_file <file_path>: Filter with a criterion from a file.
 - or_start / or_end: Group filters with OR logic.""")
+    parser.add_argument("--convert-to-bibtex", help="Convert an existing JSON results file to BibTeX format.")
 
     args = parser.parse_args()
-    main(args.initial_papers, args.output_file, args.filter, args.cache_file, args.llm_provider, args.gemini_cli_path, args.batch_size, args.llm_batch_size)
+
+    if args.convert_to_bibtex:
+        try:
+            with open(args.convert_to_bibtex, 'r') as f:
+                papers = json.load(f)
+            
+            bibtex_data = to_bibtex(papers)
+            output_file = os.path.splitext(args.convert_to_bibtex)[0] + '.bib'
+            
+            with open(output_file, 'w') as f:
+                f.write(bibtex_data)
+            
+            print(f"Successfully converted {args.convert_to_bibtex} to {output_file}")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"Error converting file: {e}")
+        sys.exit(0)
+
+    if not args.initial_papers:
+        parser.error("--initial-papers is required when not using --convert-to-bibtex")
+
+    if not args.filter:
+        parser.error("--filter is required when not using --convert-to-bibtex")
+
+    main(args.initial_papers, args.output_file, args.filter, args.cache_file, args.llm_provider, args.gemini_cli_path, args.batch_size, args.llm_batch_size, args.retry_on_400, args.output_format)
