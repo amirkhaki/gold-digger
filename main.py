@@ -43,6 +43,12 @@ def to_bibtex(papers):
     """
     bibtex_entries = []
     for paper in papers:
+        # Prefer the BibTeX from citationStyles if available
+        if paper.get("citationStyles") and paper["citationStyles"].get("bibtex"):
+            bibtex_entries.append(paper["citationStyles"]["bibtex"])
+            continue
+
+        # Fallback to manual creation
         entry_type = "@article" # Default to article
         if paper.get("venue"):
             # Heuristic to determine if it's a conference paper
@@ -64,8 +70,11 @@ def to_bibtex(papers):
                 fields.append(f"  journal   = {{{paper.get('venue')}}}")
             else:
                 fields.append(f"  booktitle = {{{paper.get('venue')}}}")
-        if paper.get("doi"):
-            fields.append(f"  doi       = {{{paper.get('doi')}}}")
+        
+        external_ids = paper.get("externalIds", {})
+        if external_ids.get("DOI"):
+            fields.append(f"  doi       = {{{external_ids.get('DOI')}}}")
+
         if paper.get("abstract"):
             fields.append(f"  abstract  = {{{paper.get('abstract')}}}")
             
@@ -95,7 +104,7 @@ def get_paper_details_batch(paper_ids, cache_file, retry_on_400=0):
             try:
                 response = requests.post(
                     'https://api.semanticscholar.org/graph/v1/paper/batch',
-                    params={'fields': 'title,authors,year,abstract,citations,references'},
+                    params={'fields': 'title,authors,year,abstract,citations,references,citationStyles,externalIds'},
                     json={"ids": papers_to_fetch},
                     headers=headers
                 )
