@@ -107,7 +107,13 @@ def filter_by_year(papers, year_op_tuple):
     """
     Filters a list of papers by publication year using an operator.
     """
-    year, op = year_op_tuple
+    year_str, op = year_op_tuple
+    try:
+        year = int(year_str)
+    except ValueError:
+        print(f"Invalid year format: {year_str}. Year must be an integer.")
+        return []
+
     print(f"Filtering {len(papers)} papers with year {op} {year}...")
     
     ops = {
@@ -336,7 +342,7 @@ if __name__ == "__main__":
         description="Snowball literature search tool.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("--initial-papers", nargs='+', required=True, help="List of initial paper IDs.")
+    parser.add_argument("--initial-papers", nargs='+', required=True, help="List of initial paper IDs. Can be a Semantic Scholar Paper ID, DOI, or arXiv ID.")
     parser.add_argument("--output-file", default="snowball_results.json", help="Output file for the results.")
     parser.add_argument("--cache-file", default="semantic_scholar_cache.json", help="Cache file for Semantic Scholar data.")
     parser.add_argument("--filter", nargs='+', action='append', required=True, 
