@@ -6,6 +6,7 @@ import sys
 import argparse
 import google.generativeai as genai
 from tqdm import tqdm
+import subprocess
 
 # --- Configuration ---
 SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
@@ -107,7 +108,7 @@ def filter_by_year(papers, year_op_tuple):
     """
     Filters a list of papers by publication year using an operator.
     """
-    year_str, op = year_op_tuple
+    op, year_str = year_op_tuple
     try:
         year = int(year_str)
     except ValueError:
@@ -154,17 +155,18 @@ def filter_by_author(papers, author_name):
     print(f"Found {len(filtered_papers)} matching papers.")
     return filtered_papers
 
-def filter_papers_with_llm(papers, criterion):
+def filter_papers_with_llm(papers, criterion, llm_provider='gemini-api', gemini_cli_path='gemini'):
     """
-    Filters a list of papers based on a criterion using the Gemini API in batch mode.
+    Filters a list of papers based on a criterion using an LLM provider.
     """
-    print(f"Filtering {len(papers)} papers with LLM in batch mode...")
+    print(f"Filtering {len(papers)} papers with LLM ({llm_provider})...")
 
-    # Configure the Gemini API
-    # TODO: Replace "YOUR_API_KEY" with your actual Gemini API key.
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY")
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    if llm_provider == 'gemini-api':
+        # Configure the Gemini API
+        # TODO: Replace "YOUR_API_KEY" with your actual Gemini API key.
+        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY")
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-pro')
 
     filtered_papers = []
     BATCH_SIZE = 5
@@ -181,15 +183,27 @@ def filter_papers_with_llm(papers, criterion):
         prompt += "Which of these papers (listed by their number) meet the criterion? Please return a comma-separated list of numbers (e.g., 1, 3, 5)."
 
         try:
-            response = model.generate_content(prompt)
+            if llm_provider == 'gemini-api':
+                response = model.generate_content(prompt)
+                response_text = response.text
+            elif llm_provider == 'gemini-cli':
+                process = subprocess.run([gemini_cli_path, "-p", prompt], capture_output=True, text=True)
+                if process.returncode != 0:
+                    print(f"gemini-cli failed with error: {process.stderr}")
+                    continue
+                response_text = process.stdout
+            else:
+                print(f"Unknown LLM provider: {llm_provider}")
+                continue
+
             # Extract numbers from the response
             try:
-                paper_numbers = [int(n.strip()) for n in response.text.split(',') if n.strip().isdigit()]
+                paper_numbers = [int(n.strip()) for n in response_text.split(',') if n.strip().isdigit()]
                 for num in paper_numbers:
                     if 1 <= num <= len(batch):
                         filtered_papers.append(batch[num-1])
             except (ValueError, IndexError) as e:
-                print(f"Could not parse LLM response: {response.text}. Error: {e}")
+                print(f"Could not parse LLM response: {response_text}. Error: {e}")
 
         except Exception as e:
             print(f"An error occurred while processing a batch: {e}")
@@ -197,7 +211,7 @@ def filter_papers_with_llm(papers, criterion):
     print(f"Found {len(filtered_papers)} matching papers.")
     return filtered_papers
 
-def filter_papers_with_llm_from_file(papers, file_path):
+def filter_papers_with_llm_from_file(papers, file_path, llm_provider='gemini-api', gemini_cli_path='gemini'):
     """
     Filters papers based on a criterion read from a file.
     """
@@ -208,7 +222,7 @@ def filter_papers_with_llm_from_file(papers, file_path):
         print(f"Criterion file not found: {file_path}")
         return []
     
-    return filter_papers_with_llm(papers, criterion)
+    return filter_papers_with_llm(papers, criterion, llm_provider, gemini_cli_path)
 
 
 # --- Core Logic ---
@@ -273,7 +287,7 @@ FILTER_MAPPING = {
     "llm_from_file": filter_papers_with_llm_from_file,
 }
 
-def parse_filter_args(filter_args):
+def parse_filter_args(filter_args, filter_mapping=FILTER_MAPPING):
     """
     Parses the filter arguments from the command line.
     """
@@ -298,11 +312,11 @@ def parse_filter_args(filter_args):
             or_group = None
             continue
 
-        if filter_name not in FILTER_MAPPING:
+        if filter_name not in filter_mapping:
             print(f"Unknown filter: {filter_name}")
             return None
 
-        filter_func = FILTER_MAPPING[filter_name]
+        filter_func = filter_mapping[filter_name]
         filter_arg = tuple(args[1:])
         
         # Special handling for single-argument filters
@@ -320,11 +334,19 @@ def parse_filter_args(filter_args):
 
     return filter_pipeline
 
-def main(initial_papers, output_file, filter_args, cache_file):
+def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gemini_cli_path):
     """
     Main function to run the literature snowballing process.
     """
-    filter_pipeline = parse_filter_args(filter_args)
+    
+    llm_filter = lambda papers, criterion: filter_papers_with_llm(papers, criterion, llm_provider, gemini_cli_path)
+    llm_from_file_filter = lambda papers, file_path: filter_papers_with_llm_from_file(papers, file_path, llm_provider, gemini_cli_path)
+
+    local_filter_mapping = FILTER_MAPPING.copy()
+    local_filter_mapping['llm'] = llm_filter
+    local_filter_mapping['llm_from_file'] = llm_from_file_filter
+
+    filter_pipeline = parse_filter_args(filter_args, local_filter_mapping)
     if filter_pipeline is None:
         return
     print(filter_pipeline)
@@ -345,6 +367,8 @@ if __name__ == "__main__":
     parser.add_argument("--initial-papers", nargs='+', required=True, help="List of initial paper IDs. Can be a Semantic Scholar Paper ID, DOI, or arXiv ID.")
     parser.add_argument("--output-file", default="snowball_results.json", help="Output file for the results.")
     parser.add_argument("--cache-file", default="semantic_scholar_cache.json", help="Cache file for Semantic Scholar data.")
+    parser.add_argument("--llm-provider", choices=['gemini-api', 'gemini-cli'], default='gemini-api', help="LLM provider to use.")
+    parser.add_argument("--gemini-cli-path", default='gemini', help="Path to the gemini-cli executable.")
     parser.add_argument("--filter", nargs='+', action='append', required=True, 
                         help="""Filter to apply. Can be used multiple times.
 
@@ -357,4 +381,4 @@ Available filters:
 - or_start / or_end: Group filters with OR logic.""")
 
     args = parser.parse_args()
-    main(args.initial_papers, args.output_file, args.filter, args.cache_file)
+    main(args.initial_papers, args.output_file, args.filter, args.cache_file, args.llm_provider, args.gemini_cli_path)
