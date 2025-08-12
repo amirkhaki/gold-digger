@@ -38,38 +38,45 @@ def save_cache(cache, cache_file):
     os.rename(tmp_file, cache_file)
 
 # --- Semantic Scholar API ---
-def get_paper_details(paper_id, cache_file):
+def get_paper_details_batch(paper_ids, cache_file):
     """
-    Fetches paper details from Semantic Scholar API, using cache if available.
+    Fetches paper details in batch from Semantic Scholar API, using cache if available.
     """
     cache = load_cache(cache_file)
-    if paper_id in cache:
-        print(f"Using cached details for paper: {paper_id}")
-        return cache[paper_id]
+    
+    papers_to_fetch = [pid for pid in paper_ids if pid not in cache]
+    
+    if papers_to_fetch:
+        print(f"Fetching details for {len(papers_to_fetch)} papers in a batch.")
+        headers = {}
+        if SEMANTIC_SCHOLAR_API_KEY:
+            headers['x-api-key'] = SEMANTIC_SCHOLAR_API_KEY
 
-    print(f"Fetching details for paper: {paper_id}")
-    headers = {}
-    if SEMANTIC_SCHOLAR_API_KEY:
-        headers['x-api-key'] = SEMANTIC_SCHOLAR_API_KEY
-
-    try:
-        # Request DOI field from the API
-        response = requests.get(f"https://api.semanticscholar.org/v1/paper/{paper_id}?fields=title,authors,year,abstract,citations,references,doi", headers=headers)
-        response.raise_for_status()  # Raise an exception for bad status codes
-        paper_data = response.json()
-
-        # Ensure citations and references are lists
-        if 'citations' not in paper_data:
-            paper_data['citations'] = []
-        if 'references' not in paper_data:
-            paper_data['references'] = []
+        try:
+            response = requests.post(
+                'https://api.semanticscholar.org/graph/v1/paper/batch',
+                params={'fields': 'title,authors,year,abstract,citations,references,doi'},
+                json={"ids": papers_to_fetch},
+                headers=headers
+            )
+            response.raise_for_status()
             
-        cache[paper_id] = paper_data
-        save_cache(cache, cache_file)
-        return paper_data
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching paper {paper_id}: {e}")
-        return None
+            for paper_data in response.json():
+                if paper_data: # API returns None for papers not found
+                    # Ensure citations and references are lists
+                    if 'citations' not in paper_data:
+                        paper_data['citations'] = []
+                    if 'references' not in paper_data:
+                        paper_data['references'] = []
+                    
+                    cache[paper_data['paperId']] = paper_data
+
+            save_cache(cache, cache_file)
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching batch of papers: {e}")
+
+    return {pid: cache.get(pid) for pid in paper_ids}
 
 # --- Filtering ---
 def or_filter(papers, sub_filters):
@@ -155,7 +162,7 @@ def filter_by_author(papers, author_name):
     print(f"Found {len(filtered_papers)} matching papers.")
     return filtered_papers
 
-def filter_papers_with_llm(papers, criterion, llm_provider='gemini-api', gemini_cli_path='gemini'):
+def filter_papers_with_llm(papers, criterion, llm_provider='gemini-api', gemini_cli_path='gemini', batch_size=5):
     """
     Filters a list of papers based on a criterion using an LLM provider.
     """
@@ -169,10 +176,9 @@ def filter_papers_with_llm(papers, criterion, llm_provider='gemini-api', gemini_
         model = genai.GenerativeModel('gemini-pro')
 
     filtered_papers = []
-    BATCH_SIZE = 5
 
-    for i in range(0, len(papers), BATCH_SIZE):
-        batch = papers[i:i+BATCH_SIZE]
+    for i in range(0, len(papers), batch_size):
+        batch = papers[i:i+batch_size]
         
         prompt = "Here are several papers:\n\n"
         for j, paper in enumerate(batch):
@@ -211,7 +217,7 @@ def filter_papers_with_llm(papers, criterion, llm_provider='gemini-api', gemini_
     print(f"Found {len(filtered_papers)} matching papers.")
     return filtered_papers
 
-def filter_papers_with_llm_from_file(papers, file_path, llm_provider='gemini-api', gemini_cli_path='gemini'):
+def filter_papers_with_llm_from_file(papers, file_path, llm_provider='gemini-api', gemini_cli_path='gemini', batch_size=5):
     """
     Filters papers based on a criterion read from a file.
     """
@@ -222,12 +228,12 @@ def filter_papers_with_llm_from_file(papers, file_path, llm_provider='gemini-api
         print(f"Criterion file not found: {file_path}")
         return []
     
-    return filter_papers_with_llm(papers, criterion, llm_provider, gemini_cli_path)
+    return filter_papers_with_llm(papers, criterion, llm_provider, gemini_cli_path, batch_size)
 
 
 # --- Core Logic ---
 
-def snowball_literature(starting_papers, filters, cache_file):
+def snowball_literature(starting_papers, filters, cache_file, batch_size=10):
     """
     Main function to perform the literature snowballing.
     """
@@ -237,37 +243,43 @@ def snowball_literature(starting_papers, filters, cache_file):
     with tqdm(total=len(papers_to_check)) as pbar:
         try:
             while papers_to_check:
-                paper_id = papers_to_check.pop()
-                if paper_id in done_papers:
-                    pbar.update(1)
+                # Create a batch of papers to process
+                batch_ids = []
+                while papers_to_check and len(batch_ids) < batch_size:
+                    paper_id = papers_to_check.pop()
+                    if paper_id not in done_papers:
+                        batch_ids.append(paper_id)
+
+                if not batch_ids:
                     continue
 
-                paper_details = get_paper_details(paper_id, cache_file)
-                
-                if not paper_details:
+                paper_details_batch = get_paper_details_batch(batch_ids, cache_file)
+
+                for paper_id, paper_details in paper_details_batch.items():
+                    if not paper_details:
+                        pbar.update(1)
+                        continue
+
+                    done_papers[paper_id] = paper_details
+
+                    # Combine citations and references for processing
+                    related_papers = paper_details.get("citations", []) + paper_details.get("references", [])
+
+                    if related_papers:
+                        # Apply filters in sequence
+                        filtered_papers = related_papers
+                        for filter_func, filter_arg in filters:
+                            filtered_papers = filter_func(filtered_papers, filter_arg)
+
+                        new_papers = 0
+                        for paper in filtered_papers:
+                            if paper['paperId'] not in done_papers:
+                                papers_to_check.add(paper['paperId'])
+                                new_papers += 1
+                        pbar.total += new_papers
+                    
                     pbar.update(1)
-                    continue
-
-                done_papers[paper_id] = paper_details
-
-                # Combine citations and references for processing
-                related_papers = paper_details.get("citations", []) + paper_details.get("references", [])
-
-                if related_papers:
-                    # Apply filters in sequence
-                    filtered_papers = related_papers
-                    for filter_func, filter_arg in filters:
-                        filtered_papers = filter_func(filtered_papers, filter_arg)
-
-                    new_papers = 0
-                    for paper in filtered_papers:
-                        if paper['paperId'] not in done_papers:
-                            papers_to_check.add(paper['paperId'])
-                            new_papers += 1
-                    pbar.total += new_papers
-                
-                pbar.update(1)
-                pbar.set_description(f"Processed: {paper_id}")
+                    pbar.set_description(f"Processed: {paper_id}")
 
         except KeyboardInterrupt:
             print("\nProcess interrupted by user. Exiting...")
@@ -334,13 +346,13 @@ def parse_filter_args(filter_args, filter_mapping=FILTER_MAPPING):
 
     return filter_pipeline
 
-def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gemini_cli_path):
+def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gemini_cli_path, batch_size, llm_batch_size):
     """
     Main function to run the literature snowballing process.
     """
     
-    llm_filter = lambda papers, criterion: filter_papers_with_llm(papers, criterion, llm_provider, gemini_cli_path)
-    llm_from_file_filter = lambda papers, file_path: filter_papers_with_llm_from_file(papers, file_path, llm_provider, gemini_cli_path)
+    llm_filter = lambda papers, criterion: filter_papers_with_llm(papers, criterion, llm_provider, gemini_cli_path, llm_batch_size)
+    llm_from_file_filter = lambda papers, file_path: filter_papers_with_llm_from_file(papers, file_path, llm_provider, gemini_cli_path, llm_batch_size)
 
     local_filter_mapping = FILTER_MAPPING.copy()
     local_filter_mapping['llm'] = llm_filter
@@ -350,7 +362,7 @@ def main(initial_papers, output_file, filter_args, cache_file, llm_provider, gem
     if filter_pipeline is None:
         return
 
-    results = snowball_literature(initial_papers, filter_pipeline, cache_file)
+    results = snowball_literature(initial_papers, filter_pipeline, cache_file, batch_size)
 
     # Write results to a file
     with open(output_file, "w") as f:
@@ -366,6 +378,8 @@ if __name__ == "__main__":
     parser.add_argument("--initial-papers", nargs='+', required=True, help="List of initial paper IDs. Can be a Semantic Scholar Paper ID, DOI, or arXiv ID.")
     parser.add_argument("--output-file", default="snowball_results.json", help="Output file for the results.")
     parser.add_argument("--cache-file", default="semantic_scholar_cache.json", help="Cache file for Semantic Scholar data.")
+    parser.add_argument("--batch-size", type=int, default=10, help="Maximum number of papers to fetch in a single batch.")
+    parser.add_argument("--llm-batch-size", type=int, default=5, help="Maximum number of papers to process in a single batch with the LLM filter.")
     parser.add_argument("--llm-provider", choices=['gemini-api', 'gemini-cli'], default='gemini-api', help="LLM provider to use.")
     parser.add_argument("--gemini-cli-path", default='gemini', help="Path to the gemini-cli executable.")
     parser.add_argument("--filter", nargs='+', action='append', required=True, 
@@ -380,4 +394,4 @@ Available filters:
 - or_start / or_end: Group filters with OR logic.""")
 
     args = parser.parse_args()
-    main(args.initial_papers, args.output_file, args.filter, args.cache_file, args.llm_provider, args.gemini_cli_path)
+    main(args.initial_papers, args.output_file, args.filter, args.cache_file, args.llm_provider, args.gemini_cli_path, args.batch_size, args.llm_batch_size)

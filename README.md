@@ -48,6 +48,8 @@ python main.py --initial-papers <paper_id_1> <paper_id_2> ... --filter <filter_1
 *   `--initial-papers`: A list of initial paper IDs to start the snowballing from. These can be Semantic Scholar Paper IDs, DOIs, or arXiv IDs. (Required)
 *   `--output-file`: The file to save the results to. (Default: `snowball_results.json`)
 *   `--cache-file`: The file to use for caching Semantic Scholar API responses. (Default: `semantic_scholar_cache.json`)
+*   `--batch-size`: The maximum number of papers to fetch in a single batch from Semantic Scholar. (Default: 10)
+*   `--llm-batch-size`: The maximum number of papers to process in a single batch with the LLM filter. (Default: 5)
 *   `--llm-provider`: The LLM provider to use for the `llm` filter. (Choices: `gemini-api`, `gemini-cli`; Default: `gemini-api`)
 *   `--gemini-cli-path`: The path to the `gemini-cli` executable. (Default: `gemini`)
 *   `--filter`: A filter to apply to the papers. This argument can be used multiple times. (Required)
@@ -84,7 +86,7 @@ Filters papers by author name.
 
 ### `llm`
 
-Filters papers using a custom criterion with an LLM.
+Filters papers using a custom criterion with an LLM. The papers are processed in batches, which can be controlled with the `--llm-batch-size` argument.
 
 **Syntax:** `--filter llm <criterion>`
 
@@ -92,7 +94,7 @@ Filters papers using a custom criterion with an LLM.
 
 ### `llm_from_file`
 
-Filters papers using a criterion from a file.
+Filters papers using a criterion from a file. The papers are processed in batches, which can be controlled with the `--llm-batch-size` argument.
 
 **Syntax:** `--filter llm_from_file <file_path>`
 
