@@ -95,13 +95,14 @@ def get_paper_details_batch(paper_ids, cache_file, retry_on_400=0):
             try:
                 response = requests.post(
                     'https://api.semanticscholar.org/graph/v1/paper/batch',
-                    params={'fields': 'title,authors,year,abstract,citations,references,doi'},
+                    params={'fields': 'title,authors,year,abstract,citations,references'},
                     json={"ids": papers_to_fetch},
                     headers=headers
                 )
                 response.raise_for_status()
                 
-                for paper_data in response.json():
+                response_data = response.json()
+                for original_id, paper_data in zip(papers_to_fetch, response_data):
                     if paper_data: # API returns None for papers not found
                         # Ensure citations and references are lists
                         if 'citations' not in paper_data:
@@ -109,7 +110,9 @@ def get_paper_details_batch(paper_ids, cache_file, retry_on_400=0):
                         if 'references' not in paper_data:
                             paper_data['references'] = []
                         
+                        # Cache by both the canonical ID and the original ID
                         cache[paper_data['paperId']] = paper_data
+                        cache[original_id] = paper_data
 
                 save_cache(cache, cache_file)
                 break  # Success, exit the loop
