@@ -1,28 +1,157 @@
-# gold-digger
-literature snowballing
+# Gold Digger
 
-``` shell
+Gold Digger is a command-line tool for snowballing literature search, starting from a few initial papers. It uses the Semantic Scholar API to find citations and references, and provides a flexible filtering mechanism to narrow down the results.
 
-usage: main.py [-h] --initial-papers INITIAL_PAPERS [INITIAL_PAPERS ...] [--output-file OUTPUT_FILE] [--cache-file CACHE_FILE] --filter FILTER [FILTER ...]
+## Installation
 
-Snowball literature search tool.
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/your-username/gold-digger.git
+    cd gold-digger
+    ```
 
-options:
-  -h, --help            show this help message and exit
-  --initial-papers INITIAL_PAPERS [INITIAL_PAPERS ...]
-                        List of initial paper IDs.
-  --output-file OUTPUT_FILE
-                        Output file for the results.
-  --cache-file CACHE_FILE
-                        Cache file for Semantic Scholar data.
-  --filter FILTER [FILTER ...]
-                        Filter to apply. Can be used multiple times.
-                        
-                        Available filters:
-                        - field <field_name> <keyword>: Filter by keyword in a field (e.g., title, abstract).
-                        - year <lt|gt|eq|le|ge> <year>: Filter by publication year.
-                        - author <author_name>: Filter by author name.
-                        - llm <criterion>: Filter with a custom criterion using an LLM.
-                        - llm_from_file <file_path>: Filter with a criterion from a file.
-                        - or_start / or_end: Group filters with OR logic.
+2.  Install the required Python packages:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+## Configuration
+
+### Semantic Scholar API Key
+
+The tool can be used without a Semantic Scholar API key, but it is recommended to use one to get higher rate limits. You can get a key from the [Semantic Scholar website](https://www.semanticscholar.org/product/api).
+
+Once you have a key, you can set it as an environment variable:
+
+```bash
+export SEMANTIC_SCHOLAR_API_KEY="YOUR_API_KEY"
+```
+
+### Gemini API Key
+
+The `llm` filter can use the Gemini API for filtering. To use it, you need a Gemini API key. You can get one from [Google AI Studio](https://aistudio.google.com/).
+
+Set the API key as an environment variable:
+
+```bash
+export GEMINI_API_KEY="YOUR_API_KEY"
+```
+
+## Usage
+
+```bash
+python main.py --initial-papers <paper_id_1> <paper_id_2> ... --filter <filter_1> --filter <filter_2> ...
+```
+
+### Arguments
+
+*   `--initial-papers`: A list of initial paper IDs to start the snowballing from. These can be Semantic Scholar Paper IDs, DOIs, or arXiv IDs. (Required)
+*   `--output-file`: The file to save the results to. (Default: `snowball_results.json`)
+*   `--cache-file`: The file to use for caching Semantic Scholar API responses. (Default: `semantic_scholar_cache.json`)
+*   `--llm-provider`: The LLM provider to use for the `llm` filter. (Choices: `gemini-api`, `gemini-cli`; Default: `gemini-api`)
+*   `--gemini-cli-path`: The path to the `gemini-cli` executable. (Default: `gemini`)
+*   `--filter`: A filter to apply to the papers. This argument can be used multiple times. (Required)
+
+## Filters
+
+Filters are used to narrow down the results of the literature search.
+
+### `field`
+
+Filters papers by a keyword in a specific field.
+
+**Syntax:** `--filter field <field_name> <keyword>`
+
+*   `<field_name>`: The field to search in (e.g., `title`, `abstract`).
+*   `<keyword>`: The keyword to search for.
+
+### `year`
+
+Filters papers by publication year.
+
+**Syntax:** `--filter year <operator> <year>`
+
+*   `<operator>`: One of `lt` (less than), `gt` (greater than), `eq` (equal to), `le` (less than or equal to), `ge` (greater than or equal to).
+*   `<year>`: The year to compare against.
+
+### `author`
+
+Filters papers by author name.
+
+**Syntax:** `--filter author <author_name>`
+
+*   `<author_name>`: The name of the author to search for.
+
+### `llm`
+
+Filters papers using a custom criterion with an LLM.
+
+**Syntax:** `--filter llm <criterion>`
+
+*   `<criterion>`: The criterion to use for filtering. This will be sent to the LLM.
+
+### `llm_from_file`
+
+Filters papers using a criterion from a file.
+
+**Syntax:** `--filter llm_from_file <file_path>`
+
+*   `<file_path>`: The path to the file containing the criterion.
+
+### `or` logic
+
+You can group filters with OR logic using `or_start` and `or_end`.
+
+**Syntax:**
+```bash
+--filter or_start \
+--filter <filter_1> \
+--filter <filter_2> \
+... \
+--filter or_end
+```
+
+## Examples
+
+### Basic Example
+
+Find papers related to "machine learning" in the title, published after 2020.
+
+```bash
+python main.py \
+    --initial-papers 10.1109/CVPR.2016.90 \
+    --filter field title "machine learning" \
+    --filter year gt 2020
+```
+
+### Using OR logic
+
+Find papers with "attention" in the title OR "transformer" in the abstract.
+
+```bash
+python main.py \
+    --initial-papers 10.1109/CVPR.2016.90 \
+    --filter or_start \
+    --filter field title "attention" \
+    --filter field abstract "transformer" \
+    --filter or_end
+```
+
+### Using the LLM filter
+
+Find papers that are relevant to "explainable AI".
+
+```bash
+python main.py \
+    --initial-papers 10.1109/CVPR.2016.90 \
+    --filter llm "papers relevant to explainable AI"
+```
+
+### Using the `gemini-cli` tool
+
+```bash
+python main.py \
+    --initial-papers 10.1109/CVPR.2016.90 \
+    --llm-provider gemini-cli \
+    --filter llm "papers relevant to explainable AI"
 ```
