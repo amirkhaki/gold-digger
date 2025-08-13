@@ -322,11 +322,26 @@ def snowball_literature(starting_papers, filters, cache_file, batch_size=10, ret
                     done_papers[paper_id] = paper_details
 
                     # Combine citations and references for processing
-                    related_papers = paper_details.get("citations", []) + paper_details.get("references", [])
+                    citations = paper_details.get("citations") or []
+                    references = paper_details.get("references") or []
+                    related_papers = citations + references
 
                     if related_papers:
+                        # Get the IDs of the related papers
+                        related_paper_ids = [p['paperId'] for p in related_papers if p and p.get('paperId')]
+                        
+                        papers_with_details = []
+                        for i in range(0, len(related_paper_ids), batch_size):
+                            batch_of_ids = related_paper_ids[i:i+batch_size]
+                            
+                            # Fetch the full details of the related papers
+                            related_paper_details_batch = get_paper_details_batch(batch_of_ids, cache_file, retry_on_400)
+                            
+                            # Get the list of paper detail objects
+                            papers_with_details.extend([details for details in related_paper_details_batch.values() if details])
+
                         # Apply filters in sequence
-                        filtered_papers = related_papers
+                        filtered_papers = papers_with_details
                         for filter_func, filter_arg in filters:
                             filtered_papers = filter_func(filtered_papers, filter_arg)
 
@@ -342,10 +357,11 @@ def snowball_literature(starting_papers, filters, cache_file, batch_size=10, ret
 
         except KeyboardInterrupt:
             print("\nProcess interrupted by user. Exiting...")
-            sys.exit(0)
+            # sys.exit(0)
 
     print("Literature snowballing complete.")
     return done_papers
+
 
 
 # --- Main Execution ---

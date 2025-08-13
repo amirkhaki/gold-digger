@@ -43,6 +43,8 @@ export GEMINI_API_KEY="YOUR_API_KEY"
 python main.py --initial-papers <paper_id_1> <paper_id_2> ... --filter <filter_1> --filter <filter_2> ...
 ```
 
+**Note:** If you interrupt the process with `Ctrl-C`, the papers that have been processed so far will be saved to the output file.
+
 ### Arguments
 
 *   `--initial-papers`: A list of initial paper IDs to start the snowballing from. These can be Semantic Scholar Paper IDs, DOIs, or arXiv IDs. (Required, unless using `--convert-to-bibtex`)
