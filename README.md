@@ -129,11 +129,10 @@ python main.py --convert-to-bibtex snowball_results.json
 This will create a `snowball_results.bib` file in the same directory.
 
 ## Examples
-```
-
 ### Basic Example
 
 Find papers related to "machine learning" in the title, published after 2020.
+
 
 ```bash
 python main.py \
